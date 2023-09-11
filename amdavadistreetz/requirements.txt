@@ -1,0 +1,10 @@
+Flask
+Flask-Cors
+Flask-Bcrypt
+Flask-SocketIO
+stripe
+Werkzeug==2.0.3
+Flask-Lambda
+bcrypt
+boto3
+pyjwt
