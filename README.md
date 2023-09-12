@@ -2,13 +2,15 @@
 
 This project contains source code for web applications backend developed in flask framework.
 
+Full project can be found at https://www.amdavadistreetz.com/products/
+
 There are several different routes:
 
-- addons - A blueprint that defines addons routes for the application. Spporting Add, Delete, Update and Retrieve addons from dynamodb.
-- customization - A blueprint that defines analytics routes for the application. Spporting Add, Delete, Update and Retrieve customizations from dynamodb.
-- products - A blueprint that defines analytics routes for the application. Spporting Add, Delete, Update and Retrieve products from dynamodb.
-- categories - A blueprint that defines analytics routes for the application. Spporting Add, Delete, Update and Retrieve categories from dynamodb.
-- users - A blueprint that defines analytics routes for the application. Spporting Register, Login, ResetPassword, Store address, Store payments etc. for users from dynamodb.
+- addons - A blueprint that defines addons routes for the application. Spporting Add, Delete, Update and Retrieve addons from AWS RDS Postgres.
+- customization - A blueprint that defines analytics routes for the application. Spporting Add, Delete, Update and Retrieve customizations from AWS RDS Postgres.
+- products - A blueprint that defines analytics routes for the application. Spporting Add, Delete, Update and Retrieve products from AWS RDS Postgres.
+- categories - A blueprint that defines analytics routes for the application. Spporting Add, Delete, Update and Retrieve categories from AWS RDS Postgres.
+- users - A blueprint that defines analytics routes for the application. Spporting Register, Login, ResetPassword, Store address, Store payments etc. for users from AWS RDS Postgres.
 - analytics - A blueprint that defines analytics routes for the application.
 
 ## Users Routes
@@ -31,11 +33,11 @@ They all provide routes to be able to Add, Delete, Update and change instock sta
 
 ## Deployment CI/CD
 
-To deploy the backend simply run deploy.bat
+To deploy the backend activate venv and run `zappa update`
 
 The api is deployed on Lambda on AWS to take advantage of the serverless infrastructure. Lambda is scallable, cheap and easy to deploy.
 
-We user SAM(Serverless Application Model) CLI provided by AWS to automate the deployment.
+We use Zappa to deploy the flask app with ease to aws lambda
 
 ## TO-DO
 

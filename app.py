@@ -1,13 +1,12 @@
 
-from flask import request, jsonify
-import logging, boto3
+from flask import Flask, request, jsonify
+import logging, boto3, psycopg2, os
 from flask_cors import CORS
 from flask_bcrypt import Bcrypt
-from flask import Response
 from werkzeug.utils import secure_filename
+# from flask_socketio import SocketIO
 import random, string, stripe
 from datetime import datetime, timedelta
-from flask_lambda import FlaskLambda
 import jwt
 from botocore.exceptions import ClientError
 
@@ -15,11 +14,22 @@ stripe.api_key = "" ##Sripe Key Here...
 
 secret_key = '' #Auth Secret Key Here...
 
-app = FlaskLambda(__name__)
+db_params = {
+    "dbname": "",
+    "user": "",
+    "password": "",
+    "host": "",
+    "port": 5432,
+}
+
+app = Flask(__name__)
 bcrypt = Bcrypt(app)
+# socketio = SocketIO(app, cors_allowed_origins="*")
 CORS(app, send_wildcard=True, origins=["*"])
 
 s3 = boto3.client("s3")
+
+sns = boto3.client('sns', region_name='us-west-2')
 
 app.config['S3_BUCKET'] = "amdavadistreetzimages"
 app.config['S3_LOCATION'] = 'http://{}.s3.amazonaws.com/'.format("amdavadistreetzimages")
@@ -31,12 +41,6 @@ loyalty_table = dynamodb.Table('UsersLoyalty')
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
 
-resp_headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "OPTIONS,POST,GET,DELETE,PUT",
-}
-
 def configure_app():
     from routes.orders import orders_bp
     from routes.products import products_bp
@@ -47,19 +51,12 @@ def configure_app():
     from routes.users import users_bp
     
     app.register_blueprint(orders_bp, url_prefix='/orders')
-    CORS(orders_bp, send_wildcard=True, origins=["*"])
     app.register_blueprint(products_bp, url_prefix='/products')
-    CORS(products_bp, send_wildcard=True, origins=["*"])
     app.register_blueprint(customizations_bp, url_prefix='/customizations')
-    CORS(customizations_bp, send_wildcard=True, origins=["*"])
     app.register_blueprint(analytics_bp, url_prefix='/analytics')
-    CORS(analytics_bp, send_wildcard=True, origins=["*"])
     app.register_blueprint(addons_bp, url_prefix='/addons')
-    CORS(addons_bp, send_wildcard=True, origins=["*"])
     app.register_blueprint(categories_bp, url_prefix='/categories')
-    CORS(categories_bp, send_wildcard=True, origins=["*"])
     app.register_blueprint(users_bp, url_prefix='/users')
-    CORS(users_bp, send_wildcard=True, origins=["*"])
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
@@ -71,26 +68,13 @@ def upload_file_to_s3(file, bucket_name):
             bucket_name,
             file.filename,
             ExtraArgs={
-                "ContentType": file.content_type
+                "ContentType": file.content_type    #Set appropriate content type as per the file
             }
         )
     except Exception as e:
         print("Something Happened: ", e)
         return e
     return "{}{}".format(app.config["S3_LOCATION"], file.filename)
-
-@app.before_request
-def basic_authentication():
-    if request.method.lower() == 'options':
-        return Response()
-    
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', "OPTIONS,POST,GET,DELETE,PUT")
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
     
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -176,30 +160,51 @@ def add_loyalty_points(user_id, points_to_add):
     except ClientError as e:
         print(f"Error adding lifetime points: {e}")
         return False, "An error occurred while adding points"
+    
+def send_sms_notification(phoneNumber, Message):
+    try:
+        response = sns.publish(
+            PhoneNumber=phoneNumber,
+            Message=Message,
+        )
+        if response["ResponseMetadata"]["HTTPStatusCode"] == 200:
+            return True
+        else:
+            print (response)
+            return False
+    except Exception as e:
+        return e
+    
+def sms_notification(phoneNumber, status):
+    match status:
+        case 'order_placed':
+            message = "Thank you for placing your order."
+        case 'order_ready':
+            message = "Your order is ready to be picked up."
+        case 'order_pickedup':
+            message = "Thank you for your business. Please leave us a 5 star review."
+
+    return send_sms_notification(phoneNumber, message)
 
 @app.route('/placeorder', methods=['POST'])
 def placeorder():
     try:
         content = request.json
         if not content:
-            return jsonify({"error": "No checkout data provided"}), 400,  resp_headers
+            return jsonify({"error": "No checkout data provided"}), 400
         OrderId = generate_order_id()
 
-        user_id = None
-        message = None
+        Email = content["customerDetails"]["email"].strip()
+        FirstName = content["customerDetails"]["firstName"]
+        LastName = content["customerDetails"]["lastName"]
+        billingAddress = content["customerDetails"]["billingAddress"]
+        city = content["customerDetails"]["city"]
+        province = content["customerDetails"]["province"]
+        postalCode = content["customerDetails"]["postalCode"]
+        phone = content["customerDetails"]["phone"]
 
-        Email = content["email"].strip()
+        cart = content["cart"]
         payment = content["payment"]
-
-        token = request.headers.get('Authorization')
-
-        if token:
-            decoded_token = verify_token(token)
-
-            if not decoded_token:
-                return jsonify({'error': 'Invalid token'}), 401, resp_headers
-            
-            user_id = decoded_token.get('user_id')
 
         if payment['paymentMethod'] == "online":
             payment_status = process_payment(payment['token'], payment['orderTotal'], OrderId, Email)
@@ -215,66 +220,92 @@ def placeorder():
         
         OrderdOn = get_current_time()
 
+        connection = psycopg2.connect(**db_params)
+        cursor = connection.cursor()
 
-        orders_table = dynamodb.Table('Orders')
-        payments_table = dynamodb.Table('Payments')
-        items_table = dynamodb.Table('OrderItems')
+        insert_order_query = """
+        INSERT INTO Orders (OrderID, Email, "First Name", "Last Name", "billingAddress", "city", "province", "postalCode", "phone", "Ordered On", "Order Status", "Estimated Wait Time")
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING OrderID;
+        """
+        cursor.execute(insert_order_query, (OrderId, Email, FirstName, LastName, billingAddress, city, province, postalCode, phone, OrderdOn, "Submitted", 15))
+        order_id = cursor.fetchone()[0]
 
-        content["order"]["orderId"] = OrderId
-        content["order"]['userId'] = user_id
-        content["order"]['orderedOn'] = OrderdOn
-        content["order"]['orderStatus'] = "Submitted"
-        content["order"]['estimatedWaitTime'] = str(current_time + timedelta(minutes=estimated_wait_time_minutes))
-        content["payment"]['paymentId'] = paymentId
+        OrderTotal = payment["orderTotal"]
+        PaymentMethod = payment["paymentMethod"]
+        subTotal = payment["subTotal"]
+        tax = payment["tax"]
+        tip = payment["tip"]
 
-        orders_table.put_item(Item=content["order"])
+        insert_item_query = """
+        INSERT INTO payments (OrderID, "paymentMethod", "paymentId", "orderTotal", "subTotal", "tax", "tip")
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        cursor.execute(insert_item_query, (order_id, PaymentMethod, paymentId, OrderTotal, subTotal, tax, tip))
 
-        payments_table.put_item(Item=content["payment"])
-        
-        for item in content["cart"]["items"]:
-            item_data = {
-                "orderId": OrderId,
-                "itemOrderd": item["name"],
-                "itemTotal": item["itemTotal"],
-                "itemQuantity": item["quantity"],
-                "itemSpiciness": item["spiciness"]
-            }
-            response = items_table.put_item(Item=item_data)
+        for item in cart['items']:
+            item_ordered = item["name"]
+            item_total = item["itemTotal"]
+            item_quantity = item["quantity"]
+            item_spiciness = item["spiciness"]
+            addons = item["addOns"]
 
-            for addon in item.get("addOns", []):
-                addon_data = {
-                    "ItemID": response['Attributes']['ItemID'],
-                    "name": addon["name"],
-                    "price": addon["price"]
-                }
+            insert_item_query = """
+            INSERT INTO ordersItems (OrderID, "Item Ordered", "Item Total", "Item Quantity", "Item Spiciness")
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING ItemID;
+            """
+            cursor.execute(insert_item_query, (order_id, item_ordered, item_total, item_quantity, item_spiciness))
+            item_id = cursor.fetchone()[0]
 
-                response = items_table.put_item(Item=addon_data)
+            for addon in addons:
+                addon_name = addon["name"]
+                addon_price = addon["price"]
+
+                insert_addon_query = """
+                INSERT INTO ordersItemsAddOns (ItemID, "Addon Name", "Addon Price")
+                VALUES (%s, %s, %s);
+                """
+                cursor.execute(insert_addon_query, (item_id, addon_name, addon_price))
+
+        connection.commit()
+
+        cursor.close()
+        connection.close()
 
         current_time = datetime.now()
         estimated_wait_time_minutes = 15
 
-        if user_id is not None:
-            points_to_add = int(content["order"]["orderTotal"]) * 100
-            success, message = add_loyalty_points(user_id, points_to_add)
-            
-            if success:
-                message += f" {points_to_add} loyalty points added."
-                
-        # socketio.emit('new_order', content, namespace='/')
-        
+        try:
+            sms_notification(phone, "order_placed")
+        except:
+            pass
+
         return jsonify(
-            message = f'Order placed successfully.{message}',
             orderId = OrderId,
             estimatedWaitTime = current_time + timedelta(minutes=estimated_wait_time_minutes),
-        ), 200, resp_headers
+        ), 200
 
+    except psycopg2.Error as e:
+        error_message = f"PostgreSQL error: {e.pgerror}" if e.pgerror else "Unknown PostgreSQL error"
+        return jsonify({"error": error_message}), 500
     except Exception as e:
-        return jsonify({"error": str(e)}), 500,  resp_headers
+        log_warning()
+        return jsonify({"error": str(e)}), 500
+
     
-@app.route('/', methods=['POST'])
+@app.route('/', methods=['GET'])
 def hello():
     return jsonify(
-            message = f'Api working well!',
-        ), 200, resp_headers
+            message = f'Hello World.',
+        ), 200
+        
+if 'dwij0' in str(os.environ):
+    pass
+else:
+    configure_app()
 
-configure_app()
+if __name__ == '__main__':
+   configure_app()
+# # #    socketio.run(app, debug=True, host='0.0.0.0')
+   app.run(debug = True, host='0.0.0.0')
