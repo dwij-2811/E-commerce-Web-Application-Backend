@@ -136,7 +136,6 @@ def reset_password(reset_token, new_password):
 
         if result:
             expiration_time = result[0]
-            print (expiration_time)
 
             if expiration_time >= datetime.datetime.utcnow():
                 hashed_password = hash_password(new_password)
@@ -209,7 +208,7 @@ def store_user_payment(user_id, card_number, expiration_month, expiration_year, 
 def send_sms_notification(phoneNumber, Message):
     try:
         response = sns.publish(
-            PhoneNumber=phoneNumber,
+            PhoneNumber="+1" + phoneNumber,
             Message=Message,
         )
         if response["ResponseMetadata"]["HTTPStatusCode"] == 200:
@@ -218,16 +217,16 @@ def send_sms_notification(phoneNumber, Message):
             print (response)
             return False
     except Exception as e:
+        print (e)
         return e
     
 def sms_notification(phoneNumber, status):
-    match status:
-        case 'order_placed':
-            message = "Thank you for placing your order."
-        case 'order_ready':
-            message = "Your order is ready to be picked up."
-        case 'order_pickedup':
-            message = "Thank you for your business. Please leave us a 5 star review."
+    if status == 'order_placed':
+        message = "Thank you for placing your order."
+    elif status == 'order_ready':
+        message = "Your order is ready to be picked up."
+    elif status == 'order_pickedup':
+        message = "Thank you for your business. Please leave us a 5 star review."
 
     return send_sms_notification(phoneNumber, message)
 
@@ -251,7 +250,6 @@ def verify_opt(phoneNumber, otp):
         if response["ResponseMetadata"]["HTTPStatusCode"] == 200:
             return True
         else:
-            print (response)
             return None
     except sns.exceptions.VerificationException:
         return False
@@ -275,6 +273,9 @@ def check_sms_sandbox_phone_number(phoneNumber):
             except:
                 NextToken = False
         if phoneNumber in str(response["PhoneNumbers"]):
-            return True
+            if any(numbers["PhoneNumber"] == "+1"+phoneNumber and numbers["Status"] != "Pending" for numbers in response["PhoneNumbers"]):
+                return True
+            else:
+                return False
     
     return False
