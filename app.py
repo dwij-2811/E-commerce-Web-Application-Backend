@@ -39,7 +39,7 @@ dynamodb = boto3.resource('dynamodb', region_name='us-west-2')
 loyalty_table = dynamodb.Table('UsersLoyalty')
 
 app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif'}
+app.config['ALLOWED_EXTENSIONS'] = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 
 def configure_app():
     from routes.orders import orders_bp
@@ -164,7 +164,7 @@ def add_loyalty_points(user_id, points_to_add):
 def send_sms_notification(phoneNumber, Message):
     try:
         response = sns.publish(
-            PhoneNumber=phoneNumber,
+            PhoneNumber="+1" + phoneNumber,
             Message=Message,
         )
         if response["ResponseMetadata"]["HTTPStatusCode"] == 200:
@@ -278,8 +278,8 @@ def placeorder():
 
         try:
             sms_notification(phone, "order_placed")
-        except:
-            pass
+        except Exception as e:
+            print (e)
 
         return jsonify(
             orderId = OrderId,
